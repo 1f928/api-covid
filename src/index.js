@@ -20,7 +20,8 @@ const app = express();
 
 app.use(helmet());
 app.use(cors({ origin: ["*"] }));
-// app.use(pinoExpress({ logger: logger }));
+app.options('*', cors());
+app.use(pinoExpress({ logger: logger }));
 
 app.use(appRouter);
 

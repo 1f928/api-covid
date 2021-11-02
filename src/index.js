@@ -19,7 +19,7 @@ const logger = pino({ level: config.logLevel });
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: ["*"] }));
+app.use(cors());
 app.options('*', cors());
 app.use(pinoExpress({ logger: logger }));
 

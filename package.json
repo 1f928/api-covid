@@ -1,0 +1,23 @@
+{
+  "name": "api-covid",
+  "version": "1.0.0",
+  "description": "Custom API for COVID-19 dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "nodemon --ignore data/ src/index.js | pino-pretty",
+    "test": "exit 0"
+  },
+  "dependencies": {
+    "axios": "^0.24.0",
+    "cors": "^2.8.5",
+    "express": "^4.17.1",
+    "express-pino-logger": "^6.0.0",
+    "helmet": "^4.6.0",
+    "pino": "^7.0.5"
+  },
+  "devDependencies": {
+    "dotenv": "^10.0.0",
+    "nodemon": "^2.0.14",
+    "pino-pretty": "^7.1.0"
+  }
+}

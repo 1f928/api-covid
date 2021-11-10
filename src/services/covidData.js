@@ -4,14 +4,28 @@ const fs = require('fs');
 const path = require('path');
 const pino = require('pino')();
 
-const pipe = require('../util/pipe');
+const { initialValue } = require('../util/pipe');
+const {
+  leftJoin,
+  renameColumns,
+  addColumn,
+  filterAndCastColumns,
+  groupBy
+} = require('../util/data');
 
 
 // --- Data manipulation helpers
 
 const downloadFile = async (fileName, endpoint) => {
-  const response = await axios.get(`${endpoint}/${fileName}`);
-  return response.data;
+  const getUrl = `${endpoint}/${fileName}`
+  try {
+    const response = await axios.get(getUrl);
+    return response.data || {};
+  } catch (err) {
+    pino.error(`Error downloading data from ${getUrl}`);
+    pino.error(err)
+    return {};
+  }
 };
 
 // Converts CSV file to array of objects with key-value pairs where the key
@@ -23,60 +37,28 @@ const csvToRowObjects = (csv) => {
   return rows.map((row) => {
     return row.reduce((obj, columnValue, index) => {
       const column = columnTitles[index];
-      const numColumns = ["cases", "deaths"]
-      obj[column] = (numColumns.includes(column)) ? parseInt(columnValue) : columnValue;
+      obj[column] = columnValue;
       return obj;
     }, {});
   });
 };
 
-const select = (key, values) => (rows) => rows.filter(
-  (row) => values.includes(row[key])
-);
+const countryColumns = {
+  "date": String,
 
-const counties = {
-  MO: [
-    "St. Louis",
-    "St. Louis city",
-    "St. Charles"
-  ],
-  IL: [
-    "Madison",
-    "St. Clair"
-  ]
+  "cases": Number,
+  "new_cases": Number,
+  "cases_avg": Number,
+  "cases_avg_per_100k": Number,
+  "deaths": Number,
+  "new_deaths": Number,
+  "deaths_avg": Number,
+  "deaths_avg_per_100k": Number
 };
-const selectCounties = (rows) => rows.filter(
-  (row) => 
-    (row.state === "Missouri" && counties.MO.includes(row.county)) ||
-    (row.state === "Illinois" && counties.IL.includes(row.county))
-);
+const stateColumns = { ...countryColumns, "state": String };
+const countyColumns = { ...stateColumns, "county": String };
 
-const remove = (key) => (rows) => rows.map((row) => { delete row[key]; return row });
-
-const groupBy = (groupKey) => (rows) => rows.reduce((obj, row) => ({
-  ...obj,
-  [row[groupKey]]: [...(obj[row[groupKey]] || []), row]
-}), {});
-
-const addDeltas = (rows) => rows.map((row, index, arr) => {
-  if (index === 0) return { ...row, dCases: 0, dDeaths: 0 }
-  else {
-    const prev = arr[index - 1];
-    return { 
-      ...row,
-      dCases: row.cases - prev.cases,
-      dDeaths: row.deaths - prev.deaths
-    }
-  }
-});
-
-const addCountyDeltas = (counties) => Object.entries(counties).reduce(
-  (obj, [county, data]) => ({
-    ...obj,
-    [county]: addDeltas(data)
-  }), {}
-);
-
+const keys = (obj) => Object.keys(obj);
 
 // --- Data managing
 
@@ -84,30 +66,60 @@ let data;
 const dataFilePath = path.join(__dirname, '../../data/covid-19-data.json')
 
 const loadDataFromGithub = async () => {
-  const rawEndpoint = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master';
+
+  // Helpers
+
+  const baseEndpoint = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master';
+  const raEndpoint = `${baseEndpoint}/rolling-averages`;
   const countryFile = 'us.csv';
   const stateFile = 'us-states.csv';
   const countyFile = 'us-counties-recent.csv';
 
-  const countryData = pipe(
-    csvToRowObjects,
-    addDeltas
-  )(await downloadFile(countryFile, rawEndpoint));
+  const getBaseData = async (fileName) => 
+    csvToRowObjects(await downloadFile(fileName, baseEndpoint));
 
-  const stateData = pipe(
-    csvToRowObjects,
-    select("state", ["Missouri"]),
-    remove("fips"),
-    addDeltas
-  )(await downloadFile(stateFile, rawEndpoint));
+  const getAverageData = async (fileName) =>
+    initialValue(
+      csvToRowObjects(await downloadFile(fileName, raEndpoint))
+    ).pipe(
+      renameColumns({
+        "cases": "new_cases",
+        "deaths": "new_deaths"
+      })
+    );
 
-  const countyData = pipe(
-    csvToRowObjects,
-    selectCounties,
-    remove("fips"),
-    groupBy("county"),
-    addCountyDeltas
-  )(await downloadFile(countyFile, rawEndpoint));
+  const getData = async (fileName, joinColumns) => {
+    const data = leftJoin(
+      await getBaseData(fileName),
+      await getAverageData(fileName),
+      joinColumns
+    );
+    return data
+  };
+
+  // Data gathering and piping
+  const pipelog = (rows) => { console.log(rows); return rows };
+
+  const countryData = 
+    initialValue(await getData(countryFile, ["date"])).pipe(
+      filterAndCastColumns(countryColumns),
+      addColumn("country", "USA"),
+      groupBy(["country"])
+    );
+
+  const stateData = 
+    initialValue(await getData(stateFile, ["date", "state"])).pipe(
+      filterAndCastColumns(stateColumns),
+      groupBy(["state"]),
+    );
+
+  const countyData = 
+  initialValue(await getData(countyFile, ["date", "state", "county"])).pipe(
+    filterAndCastColumns(countyColumns),
+    groupBy(["county", "state"]),
+  );
+
+  // Data persistence
 
   data = {
     timestamp: Date.now(),
@@ -117,12 +129,14 @@ const loadDataFromGithub = async () => {
       countyData
     }
   };
+  pino.info("Loaded COVID data from GitHub")
   
   try {
     fs.writeFileSync(
       dataFilePath,
       JSON.stringify(data)
     );
+    pino.info("Saved COVID data to file")
   } catch (err) {
     pino.error(`Failed to save data to file: ${dataFilePath}`);
     pino.error(err);
@@ -134,6 +148,7 @@ const loadDataFromFile = () => {
     if (fs.existsSync(dataFilePath)) {
       const jsonData = JSON.parse(fs.readFileSync(dataFilePath));
       data = jsonData;
+      pino.info("Loaded COVID data from file")
       return true
     } else {
       return false
@@ -148,10 +163,10 @@ const getData = async () => {
   // First, see if data is loaded in-memory
   if (!data) {
     // If not, load into memory from file
-    pino.info('Covid data not found in memory, attempting to load from file...');
+    pino.info('COVID data not found in memory, attempting to load from file...');
     if (!loadDataFromFile()) {
       // If file is not there, load from raw.github (original source)
-      pino.info('Covid data not found on file, attempting to load from github...');
+      pino.info('COVID data not found on file, attempting to load from GitHub...');
       await loadDataFromGithub();
     }
   }
@@ -161,7 +176,7 @@ const getData = async () => {
   const maxAge = 24 * 60 * 60 * 1000; // hr * min/hr * sec/min * ms/sec
   if (Date.now() - data.timestamp > maxAge) {
     pino.info('Data has reached max age, refreshing from source');
-    loadDataFromGithub();
+    loadDataFromGithub(); // Don't await - it'll give one request stale data, but it won't take minutes
   }
 
   return data.data;

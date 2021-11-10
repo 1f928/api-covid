@@ -1,12 +1,12 @@
 
-module.exports = (...fns) => (initialVal) => fns.reduce(
-  (pipedVal, fn) => fn(pipedVal),
-  initialVal
-);
+module.exports = {
+  
+  initialValue: (init) => ({
+    pipe: (...fns) => fns.reduce((pipedVal, fn) => fn(pipedVal), init)
+  }),
 
-module.exports.pipe = module.exports;
-
-module.exports.pipelog = (thing, log = console.log) => {
-  log(thing);
-  return thing;
-}
+  pipeLog: (thing, log = console.log) => {
+    log(thing);
+    return thing;
+  }
+};

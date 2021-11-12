@@ -31,6 +31,11 @@ const counties = [
 
 router.use('/', async (req, res) => {
   const rawData = await getCovidData();
+  if (!rawData || !rawData.countryData || !rawData.stateData || !rawData.countyData) {
+    pino.info('No covid data currently loaded to send, sending');
+    res.send({});
+    return
+  }
   const data = {
     countries: rawData.countryData,
     states: filterGroups(states)(rawData.stateData),

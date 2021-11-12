@@ -2,16 +2,23 @@
 // --- Joins
 
 const leftJoin = (a, b, cols) => {
-  const getRowMatch = (rows, otherRow) => {
-    const rw = rows.find((row) => 
-      cols.reduce((bool, col) => (
-        !bool ? bool : row.hasOwnProperty(col) && row[col] === otherRow[col]
-      ), true)
-    );
-    // console.log(otherRow, rw);
-    return rw ? rw : {};
-  };
-  return a.map((row) => ({...getRowMatch(b, row), ...row}));
+  // Helpers
+  const getRowKey = (row) => cols.reduce((keyStr, col) => keyStr + row[col], "");
+  const arrayToQuick = (arr) => {
+    const quick = {};
+    arr.forEach((row) => quick[getRowKey(row)] = row);
+    return quick;
+  }
+  const quickToArray = (quick) => Object.values(quick).map((val) => val);
+
+  // ---
+  const aQuick = arrayToQuick(a);
+  b.forEach((row, i) => {
+    const rowKey = getRowKey(row);
+    aQuick[rowKey] = {...aQuick[rowKey], ...row}
+  });
+
+  return quickToArray(aQuick);
 };
 
 // --- Columns

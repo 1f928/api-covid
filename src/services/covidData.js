@@ -43,32 +43,20 @@ const csvToRowObjects = (csv) => {
   });
 };
 
-const countryColumns = {
-  "date": String,
-
-  "cases": Number,
-  "new_cases": Number,
-  "cases_avg": Number,
-  "cases_avg_per_100k": Number,
-  "deaths": Number,
-  "new_deaths": Number,
-  "deaths_avg": Number,
-  "deaths_avg_per_100k": Number
-};
-const stateColumns = { ...countryColumns, "state": String };
-const countyColumns = { ...stateColumns, "county": String };
-
-const keys = (obj) => Object.keys(obj);
-
 // --- Data managing
 
 let data;
+let isRunning = false;
 const dataFilePath = path.join(__dirname, '../../data/covid-19-data.json')
 
 const loadDataFromGithub = async () => {
+  if (isRunning) {
+    pino.info("covidData.loadDataFromGithub called while already in progress, ignoring second call");
+    return
+  }
+  isRunning = true;
 
   // Helpers
-
   const baseEndpoint = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master';
   const raEndpoint = `${baseEndpoint}/rolling-averages`;
   const countryFile = 'us.csv';
@@ -98,25 +86,39 @@ const loadDataFromGithub = async () => {
   };
 
   // Data gathering and piping
-  const pipelog = (rows) => { console.log(rows); return rows };
+  const baseColumns = {
+    "date": String,
 
-  const countryData = 
-    initialValue(await getData(countryFile, ["date"])).pipe(
-      filterAndCastColumns(countryColumns),
-      addColumn("country", "USA"),
-      groupBy(["country"])
-    );
+    "cases": Number,
+    "new_cases": Number,
+    "cases_avg": Number,
+    "cases_avg_per_100k": Number,
+    "deaths": Number,
+    "new_deaths": Number,
+    "deaths_avg": Number,
+    "deaths_avg_per_100k": Number
+  };
 
-  const stateData = 
-    initialValue(await getData(stateFile, ["date", "state"])).pipe(
-      filterAndCastColumns(stateColumns),
-      groupBy(["state"]),
-    );
+  const countryColumns = {...baseColumns};
+  const countryJoin = ["date"];
+  const countryData = initialValue(await getData(countryFile, countryJoin)).pipe(
+    filterAndCastColumns(countryColumns),
+    addColumn("country", "USA"),
+    groupBy(["country"])
+  );
 
-  const countyData = 
-  initialValue(await getData(countyFile, ["date", "state", "county"])).pipe(
+  const stateColumns = {...baseColumns, "state": String};
+  const stateJoin = ["date", "state"];
+  const stateData = initialValue(await getData(stateFile, stateJoin)).pipe(
+    filterAndCastColumns(stateColumns),
+    groupBy(["state"])
+  );
+
+  const countyColumns = {...stateColumns, "county": String};
+  const countyJoin = ["date", "state", "county"];
+  const countyData = initialValue(await getData(countyFile, countyJoin)).pipe(
     filterAndCastColumns(countyColumns),
-    groupBy(["county", "state"]),
+    groupBy(["county", "state"])
   );
 
   // Data persistence
@@ -140,6 +142,8 @@ const loadDataFromGithub = async () => {
   } catch (err) {
     pino.error(`Failed to save data to file: ${dataFilePath}`);
     pino.error(err);
+  } finally {
+    isRunning = false;
   }
 };
 

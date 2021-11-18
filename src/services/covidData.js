@@ -10,7 +10,8 @@ const {
   renameColumns,
   addColumn,
   filterAndCastColumns,
-  groupBy
+  groupBy,
+  forEachGroup
 } = require('../util/data');
 
 
@@ -34,17 +35,29 @@ const pipelog = (rows) => { console.log(rows); return rows };
 
 // Converts CSV file to array of objects with key-value pairs where the key
 // is the associated column header and the value is the column value.
-const csvToRowObjects = (csv) => {
+//
+// Also, moved a lot of login into this function for the sake of speed and
+// memory consumption reduction. Not as easy to use, but more useful.
+const csvToRows = ({
+  csv = "",
+  columns = {},
+  renames = {},
+  rowFilter = null
+}) => {
   const rows = csv.split('\n').map((row) => row.split(','));
   const columnTitles = rows.shift();
+  const renamedTitles = columnTitles.map((title) =>
+    renames[title] ? renames[title] : title
+  );
 
-  return rows.map((row) => {
-    return row.reduce((obj, columnValue, index) => {
-      const column = columnTitles[index];
-      obj[column] = columnValue;
-      return obj;
-    }, {});
-  });
+  return rows.map((row, i) => {
+    const formattedRow = {}
+    row.forEach((columnValue, index) => {
+      const column = renamedTitles[index];
+      if (columns[column]) formattedRow[column] = columns[column](columnValue);
+    });
+    return formattedRow;
+  }).filter((row) => rowFilter ? rowFilter(row) : true);
 };
 
 // --- Data managing
@@ -67,29 +80,31 @@ const loadDataFromGithub = async () => {
   const stateFile = 'us-states.csv';
   const countyFile = 'us-counties.csv';
 
-  const getBaseData = async (fileName) => 
-    csvToRowObjects(await downloadFile(fileName, baseEndpoint));
-
-  const getAverageData = async (fileName) =>
-    initialValue(
-      csvToRowObjects(await downloadFile(fileName, raEndpoint))
-    ).pipe(
-      renameColumns({
-        "cases": "new_cases",
-        "deaths": "new_deaths"
-      })
-    );
-
-  const getData = async (fileName, joinColumns) => {
+  const getCaseData = async (fileName, columns, joinColumns, rowFilter) => {
     const data = leftJoin(
-      await getBaseData(fileName),
-      await getAverageData(fileName),
+      csvToRows({
+        csv: await downloadFile(fileName, baseEndpoint),
+        columns: columns,
+        rowFilter: rowFilter
+      }),
+      csvToRows({
+        csv: await downloadFile(fileName, raEndpoint),
+        columns: columns,
+        renames: {
+          "cases": "new_cases",
+          "deaths": "new_deaths"
+        },
+        rowFilter: rowFilter
+      }),
       joinColumns
     );
+    console.log(`Finished ${fileName}`)
     return data
   };
 
   // Data gathering and piping
+
+  // Virus data:
   const baseColumns = {
     "date": String,
 
@@ -105,25 +120,54 @@ const loadDataFromGithub = async () => {
 
   const countryColumns = {...baseColumns};
   const countryJoin = ["date"];
-  const countryData = initialValue(await getData(countryFile, countryJoin)).pipe(
-    filterAndCastColumns(countryColumns),
+  const countryData = initialValue(
+    await getCaseData(countryFile, countryColumns, countryJoin)
+  ).pipe(
     addColumn("country", "USA"),
     groupBy(["country"])
   );
 
   const stateColumns = {...baseColumns, "state": String};
   const stateJoin = ["date", "state"];
-  const stateData = initialValue(await getData(stateFile, stateJoin)).pipe(
-    filterAndCastColumns(stateColumns),
+  const stateRowFilter = (row) => row.state && row.state === "Missouri";
+  const stateData = initialValue(
+    await getCaseData(stateFile, stateColumns, stateJoin, stateRowFilter)
+  ).pipe(
     groupBy(["state"])
   );
 
   const countyColumns = {...stateColumns, "county": String};
   const countyJoin = ["date", "state", "county"];
-  const countyData = initialValue(await getData(countyFile, countyJoin)).pipe(
-    filterAndCastColumns(countyColumns),
+  const countyRowFilter = (row) => row.state && (row.state === "Missouri" || row.state === "Illinois");
+  const countyData = initialValue(
+    await getCaseData(countyFile, countyColumns, countyJoin, countyRowFilter)
+  ).pipe(
     groupBy(["county", "state"])
   );
+  
+  // Vaccination data:
+  const countyVaccData = csvToRows({
+    csv: await downloadFile(
+      'data_county_timeseries.csv',
+      'https://raw.githubusercontent.com/bansallab/vaccinetracking/main/vacc_data'
+    ),
+    columns: {
+      "date": String,
+      "state": String,
+      "county": (countyName) => String(countyName).split(' County')[0],
+      "type": String,
+      "count": Number
+    },
+    renames: {
+      "STATE_NAME": "state",
+      "COUNTY_NAME": "county",
+      "DATE": "date",
+      "CASE_TYPE": "type",
+      "CASES": "count"
+    },
+    rowFilter: countyRowFilter
+  });
+
 
   // Data persistence
 

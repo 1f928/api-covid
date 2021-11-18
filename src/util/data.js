@@ -14,6 +14,7 @@ const leftJoin = (a, b, cols) => {
   // ---
   const aQuick = arrayToQuick(a);
   b.forEach((row, i) => {
+    if (i % 10000 === 0) console.log(`${i} - ${process.memoryUsage().heapUsed / 1024 / 1024}`);
     const rowKey = getRowKey(row);
     aQuick[rowKey] = {...aQuick[rowKey], ...row}
   });
@@ -24,8 +25,7 @@ const leftJoin = (a, b, cols) => {
 // --- Columns
 
 // Name changes in the format of [{old: new}]
-const renameColumns = (changes) => (rows) => rows.map((row, i) => {
-  if (i % 10000 === 0) console.log(i);
+const renameColumns = (changes) => (rows) => rows.map((row) => {
   Object.entries(row).forEach(([key, val]) => {
     if (changes[key]) {
       delete row[key];

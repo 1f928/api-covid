@@ -24,7 +24,8 @@ const leftJoin = (a, b, cols) => {
 // --- Columns
 
 // Name changes in the format of [{old: new}]
-const renameColumns = (changes) => (rows) => rows.map((row) => {
+const renameColumns = (changes) => (rows) => rows.map((row, i) => {
+  if (i % 10000 === 0) console.log(i);
   Object.entries(row).forEach(([key, val]) => {
     if (changes[key]) {
       delete row[key];

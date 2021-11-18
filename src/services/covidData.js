@@ -18,8 +18,10 @@ const {
 
 const downloadFile = async (fileName, endpoint) => {
   const getUrl = `${endpoint}/${fileName}`
+  console.log(`Getting: ${getUrl}`)
   try {
     const response = await axios.get(getUrl);
+    console.log(`Got: ${getUrl}`)
     return response.data || {};
   } catch (err) {
     pino.error(`Error downloading data from ${getUrl}`);
@@ -27,6 +29,8 @@ const downloadFile = async (fileName, endpoint) => {
     return {};
   }
 };
+
+const pipelog = (rows) => { console.log(rows); return rows };
 
 // Converts CSV file to array of objects with key-value pairs where the key
 // is the associated column header and the value is the column value.
@@ -61,7 +65,7 @@ const loadDataFromGithub = async () => {
   const raEndpoint = `${baseEndpoint}/rolling-averages`;
   const countryFile = 'us.csv';
   const stateFile = 'us-states.csv';
-  const countyFile = 'us-counties-recent.csv';
+  const countyFile = 'us-counties.csv';
 
   const getBaseData = async (fileName) => 
     csvToRowObjects(await downloadFile(fileName, baseEndpoint));

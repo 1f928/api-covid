@@ -17,10 +17,10 @@ const stateNames = require('../util/states');
 // --- Data manipulation helpers
 
 const downloadFile = async (getUrl) => {
-  console.log(`Getting: ${getUrl}`)
+  pino.info(`Getting: ${getUrl}`)
   try {
     const response = await axios.get(getUrl);
-    console.log(`Got: ${getUrl}`)
+    pino.info(`Got: ${getUrl}`)
     return response.data || {};
   } catch (err) {
     pino.error(`Error downloading data from ${getUrl}`);

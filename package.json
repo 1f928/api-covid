@@ -4,7 +4,7 @@
   "description": "Custom API for COVID-19 dashboard",
   "main": "index.js",
   "scripts": {
-    "start": "nodemon --max-old-space-size=8192 --ignore data/ src/index.js | pino-pretty",
+    "start": "node src/index.js | pino-pretty",
     "test": "exit 0"
   },
   "dependencies": {

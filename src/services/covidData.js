@@ -6,19 +6,17 @@ const pino = require('pino')();
 
 const { initialValue } = require('../util/pipe');
 const {
-  leftJoin,
-  renameColumns,
+  multiJoin,
   addColumn,
-  filterAndCastColumns,
   groupBy,
   forEachGroup
 } = require('../util/data');
+const stateNames = require('../util/states');
 
 
 // --- Data manipulation helpers
 
-const downloadFile = async (fileName, endpoint) => {
-  const getUrl = `${endpoint}/${fileName}`
+const downloadFile = async (getUrl) => {
   console.log(`Getting: ${getUrl}`)
   try {
     const response = await axios.get(getUrl);
@@ -62,6 +60,34 @@ const csvToRows = ({
 
 // --- Data managing
 
+const stateRowFilter = (row) => row.state && row.state === "Missouri";
+const countyRowFilter = (row) => row.state && (row.state === "Missouri" || row.state === "Illinois");
+
+const calcPopulation = (numerator, denominator) => (rows) => {
+  const last = rows.pop();
+  const population = Math.floor(last[numerator] / last[denominator]);
+  rows.forEach((row) => row.pop = population);
+  return rows;
+}
+
+const patchVaccValues = (rows) => {
+  rows.forEach((row, i) => {
+    if (!row.pvacc || row.pvacc === 0) {
+      (i === 0) ? row.pvacc = 0 : row.pvacc = rows[i - 1].pvacc;
+    }
+    if (!row.fvacc || row.fvacc === 0) {
+      (i === 0) ? row.fvacc = 0 : row.fvacc = rows[i - 1].fvacc;
+    };
+  });
+  return rows;
+};
+
+const calcVaccPercents = (rows) => rows.map((row) => ({
+  ...row,
+  pvacc_pct: (row.pvacc / row.pop) * 100,
+  fvacc_pct: (row.fvacc / row.pop) * 100
+}));
+
 let data;
 let isRunning = false;
 const dataFilePath = path.join(__dirname, '../../data/covid-19-data.json')
@@ -76,33 +102,108 @@ const loadDataFromGithub = async () => {
   // Helpers
   const baseEndpoint = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master';
   const raEndpoint = `${baseEndpoint}/rolling-averages`;
-  const countryFile = 'us.csv';
-  const stateFile = 'us-states.csv';
-  const countyFile = 'us-counties.csv';
 
-  const getCaseData = async (fileName, columns, joinColumns, rowFilter) => {
-    const data = leftJoin(
-      csvToRows({
-        csv: await downloadFile(fileName, baseEndpoint),
-        columns: columns,
-        rowFilter: rowFilter
-      }),
-      csvToRows({
-        csv: await downloadFile(fileName, raEndpoint),
-        columns: columns,
-        renames: {
-          "cases": "new_cases",
-          "deaths": "new_deaths"
-        },
-        rowFilter: rowFilter
-      }),
-      joinColumns
-    );
-    console.log(`Finished ${fileName}`)
-    return data
-  };
+  const getBaseCovidData = async (fileName, columns, rowFilter) => csvToRows({
+    csv: await downloadFile(`${baseEndpoint}/${fileName}`),
+    columns: columns,
+    rowFilter: rowFilter
+  });
+
+  const getAvgCovidData = async (fileName, columns, rowFilter) => csvToRows({
+    csv: await downloadFile(`${raEndpoint}/${fileName}`),
+    columns: columns,
+    renames: {
+      "cases": "new_cases",
+      "deaths": "new_deaths"
+    },
+    rowFilter: rowFilter
+  });
 
   // Data gathering and piping
+  
+  // Vaccination data:
+  const addVaccPcts = (rows) => rows.map((row) => {
+    const total = row.pvacc + row.fvacc;
+    return {
+      ...row,
+      "pvacc_pct": row.pvacc / total,
+      "fvacc_pct": row.fvacc / total
+    };
+  });
+
+  const getCountryVaccData = async () => csvToRows({
+    csv: await downloadFile('https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/country_data/United%20States.csv'),
+    renames: {
+      "people_vaccinated": "pvacc",
+      "people_fully_vaccinated": "fvacc"
+    },
+    columns: {
+      "date": String,
+      "pvacc": Number,
+      "fvacc": Number
+    }
+  });
+
+  const getStateVaccData = async () => csvToRows({
+    csv: await downloadFile('https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv'),
+    renames: {
+      "location": "state",
+      "people_vaccinated": "pvacc",
+      "people_fully_vaccinated": "fvacc",
+      "people_vaccinated_per_hundred": "pvacc_pct"
+    },
+    columns: {
+      "date": String,
+      "state": String,
+      "pvacc": Number,
+      "fvacc": Number,
+      "pvacc_pct": (n) => Number(n) / 100
+    },
+    rowFilter: stateRowFilter
+  });
+
+  const getCountyVaccData = async () => {
+    const typeToShort = {
+      "Partial": "pvacc",
+      "Complete": "fvacc",
+      "Partial Coverage": "pvacc_pct",
+      "Complete Coverage": "fvacc_pct"
+    };
+
+    const combineTypes = (groups) => groups.map((group) => ({
+      ...group.keys,
+      ...group.rows.reduce((obj, row) => ({...obj, [row.type]: row.count}), {}),
+      pop: group.rows[0].pop
+    }));
+
+    return initialValue(
+      csvToRows({
+        csv: await downloadFile(
+          'https://raw.githubusercontent.com/bansallab/vaccinetracking/main/vacc_data/data_county_timeseries.csv'
+        ),
+        renames: {
+          "STATE_NAME": "state",
+          "COUNTY_NAME": "county",
+          "DATE": "date",
+          "CASE_TYPE": "type",
+          "CASES": "count",
+          "POPN": "pop"
+        },
+        columns: {
+          "date": String,
+          "state": (abbr) => stateNames[abbr] ? stateNames[abbr] : null,
+          "county": (countyName) => countyName.split(' County')[0],
+          "type": (type) => typeToShort[type] ? typeToShort[type] : null,
+          "count": Number,
+          "pop": Number
+        },
+        rowFilter: countyRowFilter
+      })
+    ).pipe(
+      groupBy(["state", "county", "date"]),
+      combineTypes
+    )
+  };
 
   // Virus data:
   const baseColumns = {
@@ -120,54 +221,51 @@ const loadDataFromGithub = async () => {
 
   const countryColumns = {...baseColumns};
   const countryJoin = ["date"];
-  const countryData = initialValue(
-    await getCaseData(countryFile, countryColumns, countryJoin)
-  ).pipe(
+  const countryCovidFile = "us.csv";
+
+  const countryData = initialValue(multiJoin(
+    countryJoin,
+    await getBaseCovidData(countryCovidFile, countryColumns),
+    await getAvgCovidData(countryCovidFile, countryColumns),
+    await getCountryVaccData()
+  )).pipe(
     addColumn("country", "USA"),
-    groupBy(["country"])
+    addColumn("pop", 329_500_000), // Ehh, heh. Dataset didn't have the means to calc
+    groupBy(["country"]),
+    forEachGroup(patchVaccValues),
+    forEachGroup(calcVaccPercents)
   );
 
   const stateColumns = {...baseColumns, "state": String};
   const stateJoin = ["date", "state"];
-  const stateRowFilter = (row) => row.state && row.state === "Missouri";
-  const stateData = initialValue(
-    await getCaseData(stateFile, stateColumns, stateJoin, stateRowFilter)
-  ).pipe(
-    groupBy(["state"])
+  const stateCovidFile = 'us-states.csv';
+
+
+  const stateData = initialValue(multiJoin(
+    stateJoin,
+    await getBaseCovidData(stateCovidFile, stateColumns, stateRowFilter),
+    await getAvgCovidData(stateCovidFile, stateColumns, stateRowFilter),
+    await getStateVaccData()
+  )).pipe(
+    groupBy(["state"]),
+    forEachGroup(calcPopulation("pvacc", "pvacc_pct")),
+    forEachGroup(patchVaccValues),
+    forEachGroup(calcVaccPercents)
   );
 
   const countyColumns = {...stateColumns, "county": String};
   const countyJoin = ["date", "state", "county"];
-  const countyRowFilter = (row) => row.state && (row.state === "Missouri" || row.state === "Illinois");
-  const countyData = initialValue(
-    await getCaseData(countyFile, countyColumns, countyJoin, countyRowFilter)
-  ).pipe(
-    groupBy(["county", "state"])
-  );
-  
-  // Vaccination data:
-  const countyVaccData = csvToRows({
-    csv: await downloadFile(
-      'data_county_timeseries.csv',
-      'https://raw.githubusercontent.com/bansallab/vaccinetracking/main/vacc_data'
-    ),
-    columns: {
-      "date": String,
-      "state": String,
-      "county": (countyName) => String(countyName).split(' County')[0],
-      "type": String,
-      "count": Number
-    },
-    renames: {
-      "STATE_NAME": "state",
-      "COUNTY_NAME": "county",
-      "DATE": "date",
-      "CASE_TYPE": "type",
-      "CASES": "count"
-    },
-    rowFilter: countyRowFilter
-  });
+  const countyCovidFile = 'us-counties.csv';
 
+  const countyData = initialValue(multiJoin(
+    countyJoin,
+    await getBaseCovidData(countyCovidFile, countyColumns, countyRowFilter),
+    await getAvgCovidData(countyCovidFile, countyColumns, countyRowFilter),
+    await getCountyVaccData()
+  )).pipe(
+    groupBy(["county", "state"]),
+    forEachGroup(patchVaccValues),
+  );
 
   // Data persistence
 

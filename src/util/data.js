@@ -1,25 +1,37 @@
 
 // --- Joins
 
-const leftJoin = (a, b, cols) => {
-  // Helpers
-  const getRowKey = (row) => cols.reduce((keyStr, col) => keyStr + row[col], "");
-  const arrayToQuick = (arr) => {
-    const quick = {};
-    arr.forEach((row) => quick[getRowKey(row)] = row);
-    return quick;
-  }
-  const quickToArray = (quick) => Object.values(quick).map((val) => val);
+// Helpers
+const quickToArray = (quick) => Object.values(quick).map((val) => val);
+const getRowKey = (row, keyCols) => keyCols.reduce((keyStr, col) => keyStr + row[col], "");
+const arrayToQuick = (arr, keyCols) => {
+  const quick = {};
+  arr.forEach((row) => quick[getRowKey(row, keyCols)] = row);
+  return quick;
+}
 
-  // ---
+const leftJoin = (a, b, cols) => {
   const aQuick = arrayToQuick(a);
+
   b.forEach((row, i) => {
-    if (i % 10000 === 0) console.log(`${i} - ${process.memoryUsage().heapUsed / 1024 / 1024}`);
     const rowKey = getRowKey(row);
     aQuick[rowKey] = {...aQuick[rowKey], ...row}
   });
 
   return quickToArray(aQuick);
+};
+
+const multiJoin = (keyCols, ...arrs) => {
+  const quicks = arrs.map((arr) => arrayToQuick(arr, keyCols));
+  const join = {};
+  quicks.forEach((quick) => Object.entries(quick).forEach(([rowKey, row]) => {
+    join[rowKey] = {
+      ...(join[rowKey] ? join[rowKey] : {}),
+      ...row
+    }
+  }));
+  
+  return quickToArray(join);
 };
 
 // --- Columns
@@ -73,9 +85,8 @@ const filterAndCastColumns = (columns) => (rows) => rows.map((row) => {
 // --- Groups
 
 const keysMatch = (key1, key2) => {
-  return Object.keys(key1).reduce((bool, key) => (
-    !bool ? bool : key1[key] === key2[key]
-  ), true);
+  for (key in key1) { if (key1[key] !== key2[key]) return false };
+  return true;
 }
 
 // Accepts a list of columns to group by, and transforms the
@@ -91,6 +102,7 @@ const groupBy = (groupKeys) => (rows) => {
 
   rows.forEach((row) => {
     const rowKey = groupKeys.reduce((keys, key) => ({...keys, [key]: row[key]}), {});
+    groupKeys.forEach((key) => delete row[key]);
     const stringKey = JSON.stringify(rowKey)
     if (!groups[stringKey]) groups[stringKey] = []
     groups[stringKey].push(row);
@@ -108,12 +120,13 @@ const forEachGroup = (rowsFn) => (groups) => groups.map((group) => ({
 }));
 
 const filterGroups = (keysList) => (groups) => groups.filter((group) => {
-  const km = keysList.filter((keys) => keysMatch(group.keys, keys))
-  return km.length > 0;
+  for (keys of keysList) { if (keysMatch(keys, group.keys)) return true };
+  return false;
 }); 
 
 module.exports = {
   leftJoin,
+  multiJoin,
 
   renameColumns,
   addColumn,

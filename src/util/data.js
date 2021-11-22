@@ -114,9 +114,9 @@ const groupBy = (groupKeys) => (rows) => {
   }))
 }
 
-const forEachGroup = (rowsFn) => (groups) => groups.map((group) => ({
+const forEachGroup = (...fns) => (groups) => groups.map((group) => ({
   ...group,
-  rows: rowsFn(group.rows)
+  rows: fns.reduce((pipedVal, fn) => fn(pipedVal), group.rows)
 }));
 
 const filterGroups = (keysList) => (groups) => groups.filter((group) => {

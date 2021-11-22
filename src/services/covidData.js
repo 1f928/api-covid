@@ -9,9 +9,11 @@ const {
   multiJoin,
   addColumn,
   groupBy,
-  forEachGroup
+  forEachGroup,
+  filterGroups
 } = require('../util/data');
 const stateNames = require('../util/states');
+const sum = require ('../util/sum');
 
 
 // --- Data manipulation helpers
@@ -29,7 +31,7 @@ const downloadFile = async (getUrl) => {
   }
 };
 
-const pipelog = (rows) => { console.log(rows); return rows };
+const pipelog = (rows) => { console.log(rows.slice(-10)); return rows };
 
 // Converts CSV file to array of objects with key-value pairs where the key
 // is the associated column header and the value is the column value.
@@ -55,10 +57,24 @@ const csvToRows = ({
       if (columns[column]) formattedRow[column] = columns[column](columnValue);
     });
     return formattedRow;
-  }).filter((row) => rowFilter ? rowFilter(row) : true);
+  })
+  .filter((row) => rowFilter ? rowFilter(row) : true)
+  .filter((row) => row.date ? true : false);
 };
 
 // --- Data managing
+
+const states = [
+  { state: "Missouri" }
+];
+const counties = [
+  { state: "Missouri", county: "St. Louis" },
+  { state: "Missouri", county: "St. Louis city" },
+  { state: "Missouri", county: "St. Charles" },
+
+  { state: "Illinois", county: "St. Clair" },
+  { state: "Illinois", county: "Madison" },
+];
 
 const stateRowFilter = (row) => row.state && row.state === "Missouri";
 const countyRowFilter = (row) => row.state && (row.state === "Missouri" || row.state === "Illinois");
@@ -66,6 +82,12 @@ const countyRowFilter = (row) => row.state && (row.state === "Missouri" || row.s
 const calcPopulation = (numerator, denominator) => (rows) => {
   const last = rows.pop();
   const population = Math.floor(last[numerator] / last[denominator]);
+  rows.forEach((row) => row.pop = population);
+  return rows;
+}
+
+const patchPopulation = (rows) => {
+  const population = Math.max(...rows.map((row) => row.pop || 0));
   rows.forEach((row) => row.pop = population);
   return rows;
 }
@@ -84,9 +106,34 @@ const patchVaccValues = (rows) => {
 
 const calcVaccPercents = (rows) => rows.map((row) => ({
   ...row,
-  pvacc_pct: (row.pvacc / row.pop) * 100,
-  fvacc_pct: (row.fvacc / row.pop) * 100
+  pvacc_pct: parseFloat(((row.pvacc / row.pop) * 100).toFixed(2)),
+  fvacc_pct: parseFloat(((row.fvacc / row.pop) * 100).toFixed(2))
 }));
+
+const calcActiveEst = (rows) => {
+  let cases = [];
+  let deaths = [];
+  rows.forEach((row) => {
+    cases.push(row.cases_avg);
+    deaths.push(row.deaths_avg);
+    if (cases.length > 15) { cases.shift() }
+    if (deaths.length > 15) { deaths.shift() }
+    row.active_est = Math.floor(sum(cases) - sum(deaths));
+  })
+  return rows;
+}
+
+const sort = (sortFn) => (rows) => rows.sort(sortFn);
+
+const byDate = (a, b) => {
+  if (!a.date) console.log(a)
+  const toDateValue = (dateStr) => parseInt(dateStr.split('-').join(''));
+  const aDate = toDateValue(a.date);
+  const bDate = toDateValue(b.date);
+  if (aDate > bDate) return 1
+  else if (aDate === bDate) return 0
+  else return -1
+}
 
 let data;
 let isRunning = false;
@@ -103,6 +150,7 @@ const loadDataFromGithub = async () => {
   const baseEndpoint = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master';
   const raEndpoint = `${baseEndpoint}/rolling-averages`;
 
+  // Case & Average data:
   const getBaseCovidData = async (fileName, columns, rowFilter) => csvToRows({
     csv: await downloadFile(`${baseEndpoint}/${fileName}`),
     columns: columns,
@@ -119,18 +167,13 @@ const loadDataFromGithub = async () => {
     rowFilter: rowFilter
   });
 
-  // Data gathering and piping
+  const getAvgCovidCountyData = async (fileNames, columns, rowFilter) => (
+    await Promise.all(fileNames.map(async (fileName) =>
+      await getAvgCovidData(fileName, columns, rowFilter)
+    ))
+  ).flat();
   
   // Vaccination data:
-  const addVaccPcts = (rows) => rows.map((row) => {
-    const total = row.pvacc + row.fvacc;
-    return {
-      ...row,
-      "pvacc_pct": row.pvacc / total,
-      "fvacc_pct": row.fvacc / total
-    };
-  });
-
   const getCountryVaccData = async () => csvToRows({
     csv: await downloadFile('https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/country_data/United%20States.csv'),
     renames: {
@@ -205,7 +248,6 @@ const loadDataFromGithub = async () => {
     )
   };
 
-  // Virus data:
   const baseColumns = {
     "date": String,
 
@@ -232,8 +274,12 @@ const loadDataFromGithub = async () => {
     addColumn("country", "USA"),
     addColumn("pop", 329_500_000), // Ehh, heh. Dataset didn't have the means to calc
     groupBy(["country"]),
-    forEachGroup(patchVaccValues),
-    forEachGroup(calcVaccPercents)
+    forEachGroup(
+      sort(byDate),
+      patchVaccValues,
+      calcVaccPercents,
+      calcActiveEst
+    )
   );
 
   const stateColumns = {...baseColumns, "state": String};
@@ -248,23 +294,39 @@ const loadDataFromGithub = async () => {
     await getStateVaccData()
   )).pipe(
     groupBy(["state"]),
-    forEachGroup(calcPopulation("pvacc", "pvacc_pct")),
-    forEachGroup(patchVaccValues),
-    forEachGroup(calcVaccPercents)
+    filterGroups(states),
+    forEachGroup(
+      sort(byDate),
+      patchVaccValues,
+      calcPopulation("pvacc", "pvacc_pct"),
+      calcVaccPercents,
+      calcActiveEst
+    )
   );
 
   const countyColumns = {...stateColumns, "county": String};
   const countyJoin = ["date", "state", "county"];
   const countyCovidFile = 'us-counties.csv';
+  const countyCovidAvgFiles = [
+    'us-counties-2020.csv',
+    'us-counties-2021.csv'
+  ];
 
   const countyData = initialValue(multiJoin(
     countyJoin,
     await getBaseCovidData(countyCovidFile, countyColumns, countyRowFilter),
-    await getAvgCovidData(countyCovidFile, countyColumns, countyRowFilter),
+    await getAvgCovidCountyData(countyCovidAvgFiles, countyColumns, countyRowFilter),
     await getCountyVaccData()
   )).pipe(
     groupBy(["county", "state"]),
-    forEachGroup(patchVaccValues),
+    filterGroups(counties),
+    forEachGroup(
+      patchPopulation,
+      sort(byDate),
+      patchVaccValues,
+      calcVaccPercents,
+      calcActiveEst
+    )
   );
 
   // Data persistence

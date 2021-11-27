@@ -31,7 +31,7 @@ const downloadFile = async (getUrl) => {
   }
 };
 
-const pipelog = (rows) => { console.log(rows.slice(-10)); return rows };
+const pipelog = (n = 10) => (rows) => { console.log(rows.slice(-n)); return rows };
 
 // Converts CSV file to array of objects with key-value pairs where the key
 // is the associated column header and the value is the column value.
@@ -80,7 +80,7 @@ const stateRowFilter = (row) => row.state && row.state === "Missouri";
 const countyRowFilter = (row) => row.state && (row.state === "Missouri" || row.state === "Illinois");
 
 const calcPopulation = (numerator, denominator) => (rows) => {
-  const last = rows.pop();
+  const last = rows[rows.length - 2];
   const population = Math.floor(last[numerator] / last[denominator]);
   rows.forEach((row) => row.pop = population);
   return rows;

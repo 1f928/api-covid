@@ -1,6 +1,6 @@
 {
   "name": "api-covid",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Custom API for COVID-19 dashboard",
   "main": "index.js",
   "scripts": {

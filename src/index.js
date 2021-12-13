@@ -8,6 +8,8 @@ const pinoExpress = require('express-pino-logger');
 const appRouter = require('./routes');
 const loadCovidData = require('./services/covidData');
 
+// --
+
 const desiredConfig = {
   appName: "APP_NAME",
   appPort: "APP_PORT",
@@ -15,7 +17,7 @@ const desiredConfig = {
 }
 
 const config = require('./config')(desiredConfig);
-const logger = pino({ level: config.logLevel });
+const logger = pino({ level: config.logLevel || 'info' });
 const app = express();
 
 app.use(helmet());

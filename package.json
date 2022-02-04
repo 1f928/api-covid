@@ -1,7 +1,6 @@
 {
   "name": "api-covid",
-  "version": "1.4.0,
-    'us-counties-2021.csv'",
+  "version": "1.4.0",
   "description": "Custom API for COVID-19 dashboard",
   "main": "index.js",
   "scripts": {

@@ -309,7 +309,8 @@ const loadDataFromGithub = async () => {
   const countyCovidFile = 'us-counties.csv';
   const countyCovidAvgFiles = [
     'us-counties-2020.csv',
-    'us-counties-2021.csv'
+    'us-counties-2021.csv',
+    'us-counties-2022.csv'
   ];
 
   const countyData = initialValue(multiJoin(
